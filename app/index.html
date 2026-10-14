@@ -5,7 +5,7 @@
 </head><body>
 <div class="bar"><div class="w"><span class="who">cristhedev <span style="color:var(--line)">/</span> genlayer builds</span><nav id="sites"></nav></div></div>
 <div class="head"><div class="w"><div><h1>SLA Bond</h1><p>Uptime promises backed by money, settled by consensus</p></div><button id="connect" class="ghost" type="button">Connect wallet</button></div></div>
-<div class="meta"><div class="w"><span>contract <a href="https://explorer-bradbury.genlayer.com/address/0x0000000000000000000000000000000000000000">0x0000…0000 ↗</a></span><span>network <b>testnet bradbury</b></span><span><a href="https://github.com/cris-the-dev/genlayer-slabond">source ↗</a></span><span><a href="docs.html">docs →</a></span></div></div>
+<div class="meta"><div class="w"><span>contract <a href="https://explorer-bradbury.genlayer.com/address/0xbE1ea16621f083294c7e02f34F2CAB347cdE9Ce9">0x0000…0000 ↗</a></span><span>network <b>testnet bradbury</b></span><span><a href="https://github.com/cris-the-dev/genlayer-slabond">source ↗</a></span><span><a href="docs.html">docs →</a></span></div></div>
 <main class="w">
   <p id="status" class="status" hidden></p>
   <div class="grid">
@@ -69,7 +69,7 @@
 
 <script type="module">
 import { contract, wireWallet, send, status, gen, toWei, esc, short, $, EXPLORER } from "./gl.js";
-const sla = contract("0x0000000000000000000000000000000000000000");
+const sla = contract("0xbE1ea16621f083294c7e02f34F2CAB347cdE9Ce9");
 let me = null, items = [];
 const DAY = 86400, WINDOW = 7 * DAY, EXPIRY = 90 * DAY;
 const when = (ts) => ts ? new Date(ts * 1000).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }) + " UTC" : "–";
