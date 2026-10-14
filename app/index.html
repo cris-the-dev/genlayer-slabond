@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SLA Bond</title><meta name="description" content="Uptime promises backed by money, settled by consensus"><meta name="theme-color" content="#FAFAF7">
+<link rel="stylesheet" href="app.css">
+</head><body>
+<div class="bar"><div class="w"><span class="who">cristhedev <span style="color:var(--line)">/</span> genlayer builds</span><nav id="sites"></nav></div></div>
+<div class="head"><div class="w"><div><h1>SLA Bond</h1><p>Uptime promises backed by money, settled by consensus</p></div><button id="connect" class="ghost" type="button">Connect wallet</button></div></div>
+<div class="meta"><div class="w"><span>contract <a href="https://explorer-bradbury.genlayer.com/address/0x0000000000000000000000000000000000000000">0x0000…0000 ↗</a></span><span>network <b>testnet bradbury</b></span><span><a href="https://github.com/cris-the-dev/genlayer-slabond">source ↗</a></span><span><a href="docs.html">docs →</a></span></div></div>
+<main class="w">
+  <p id="status" class="status" hidden></p>
+  <div class="grid">
+    <div>
+      <section>
+        <h2>Services</h2>
+        <div class="tbl"><table>
+          <thead><tr><th>#</th><th>Service</th><th class="r">Price</th><th class="r">Free bond</th><th class="r">Customers</th><th>Status</th></tr></thead>
+          <tbody id="services"><tr><td colspan="6" class="empty">Reading the contract…</td></tr></tbody>
+        </table></div>
+      </section>
+      <section id="detail" hidden></section>
+    </div>
+
+    <aside>
+      <section>
+        <h2>How a claim is decided</h2>
+        <dl class="kv">
+          <div><dt>Evidence</dt><dd>a page on the provider's own hosts</dd></div>
+          <div><dt>Validators extract</dt><dd>outage on that UTC date? in scope? minutes</dd></div>
+          <div><dt>Validators agree if</dt><dd>same yes/no facts, minutes within max(5, 10%)</dd></div>
+          <div><dt>Credit</dt><dd>min(max credit, minutes × rate) per covered customer</dd></div>
+          <div><dt>Per day</dt><dd>one approved claim; a rejected one does not lock the day</dd></div>
+          <div><dt>Coverage</dt><dd>whole UTC days from the day after you subscribe</dd></div>
+          <div><dt>Claim window</dt><dd>7 days after the day ends</dd></div>
+          <div><dt>Solvency</dt><dd>the free bond covers one max credit per live customer</dd></div>
+        </dl>
+      </section>
+      <section>
+        <details>
+          <summary>Offer a service</summary>
+          <form id="create">
+            <label>Service name<input name="name" minlength="3" maxlength="80" required></label>
+            <label>SLA in plain language (what counts, what is excluded)<textarea name="sla" minlength="20" maxlength="2000" required></textarea></label>
+            <label>Hosts that publish your incidents, one per line<textarea name="hosts" placeholder="status.example.com" required></textarea></label>
+            <div class="row">
+              <label>Price per term (GEN)<input name="price" type="number" step="any" min="0" value="0.002" required></label>
+              <label>Term (days)<input name="term" type="number" min="1" max="365" value="30" required></label>
+            </div>
+            <div class="row">
+              <label>Credit per outage minute (GEN)<input name="cpm" type="number" step="any" min="0" value="0.00002" required></label>
+              <label>Max credit per day (GEN)<input name="max" type="number" step="any" min="0" value="0.001" required></label>
+            </div>
+            <div class="row">
+              <label>Ignore outages shorter than (min)<input name="min" type="number" min="0" max="1440" value="10" required></label>
+              <label>Bond (GEN)<input name="bond" type="number" step="any" min="0" value="0.003" required></label>
+            </div>
+            <button type="submit">Stake bond and publish</button>
+          </form>
+        </details>
+      </section>
+    </aside>
+  </div>
+</main>
+
+<div class="steps"><ol>
+  <li><small>01</small><b>Promise</b><p>The provider writes its SLA, names the hosts where it publishes incidents and stakes a bond. Customers pay the price; it goes straight to the provider.</p></li>
+  <li><small>02</small><b>Claim</b><p>After a UTC day with an outage, any covered customer files the provider's own incident page. Validators extract the facts, not a payout.</p></li>
+  <li><small>03</small><b>Credit</b><p>A fixed formula turns minutes into a credit for every customer covered that day, reserved from the bond and withdrawn by each customer.</p></li>
+</ol></div>
+
+<script type="module">
+import { contract, wireWallet, send, status, gen, toWei, esc, short, $, EXPLORER } from "./gl.js";
+const sla = contract("0x0000000000000000000000000000000000000000");
+let me = null, items = [];
+const DAY = 86400, WINDOW = 7 * DAY, EXPIRY = 90 * DAY;
+const when = (ts) => ts ? new Date(ts * 1000).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }) + " UTC" : "–";
+const addr = (a) => `<a class="mono" href="${EXPLORER}/address/${esc(a)}">${short(a)}</a>${me && a.toLowerCase() === me.toLowerCase() ? " (you)" : ""}`;
+const link = (u) => `<a class="mono" href="${esc(u)}">${esc(u.replace(/^https:\/\//, "").slice(0, 44))}</a>`;
+
+async function load(openId) {
+  try {
+    const n = await sla.read("get_service_count");
+    items = await Promise.all([...Array(n).keys()].reverse().map((i) => sla.read("get_service", [i])));
+    $("#services").innerHTML = items.length ? items.map((s) => `<tr style="cursor:pointer" data-id="${s.id}">
+      <td class="num mut">${s.id}</td><td><a href="#service-${s.id}">${esc(s.name)}</a></td>
+      <td class="r num">${gen(s.price, 6)} GEN</td><td class="r num">${gen(s.bond, 6)} GEN</td><td class="r num">${s.live_subscribers}</td>
+      <td><span class="tag ${s.open ? "ok" : ""}">${s.open ? "open" : "closed"}</span></td></tr>`).join("")
+      : `<tr><td colspan="6" class="empty">No services yet.</td></tr>`;
+    const h = location.hash.match(/^#service-(\d+)$/), id = openId ?? (h ? Number(h[1]) : null);
+    if (items.length) show(Number.isInteger(id) && items.some((s) => s.id === id) ? id : items.find((s) => s.claim_count)?.id ?? items[0].id);
+  } catch (e) {
+    $("#services").innerHTML = `<tr><td colspan="6" class="empty">Could not read the contract: ${esc(e.message)}</td></tr>`;
+  }
+}
+
+function actions(s, sub, claims, avail, recov) {
+  if (!me) return `<p class="hint" style="margin-top:16px">Connect a wallet to subscribe, file a claim or withdraw a credit.</p>`;
+  const isP = s.provider.toLowerCase() === me.toLowerCase(), now = Date.now() / 1000, out = [];
+  const b = (fn, label, ghost = true, disabled = "", arg = "") => `<button class="${ghost ? "ghost" : ""}" data-act="${fn}"${arg !== "" ? ` data-arg="${arg}"` : ""}${disabled ? ` disabled title="${esc(disabled)}"` : ""}>${label}</button>`;
+  const live = sub.end > now, claimable = sub.end > 0 && sub.end + WINDOW > now;
+  if (!isP && s.open) {
+    const blocked = !live && claimable ? "Renew before coverage ends, or after its 7-day claim window" : "";
+    out.push(b("subscribe", live ? `Renew for ${gen(s.price, 6)} GEN (+${s.term_days} days)` : `Subscribe for ${gen(s.price, 6)} GEN (${s.term_days} days)`, false, blocked));
+  }
+  if (!isP && claimable)
+    out.push(`<form data-form="file_claim"><div class="row"><label>Outage date (UTC)<input name="day" type="date" required></label>
+      <label>Incident page on ${esc(s.hosts.join(", "))}<input name="url" type="url" pattern="https://.*" required></label></div>
+      <div><button>File claim</button></div></form>`);
+  for (const c of claims) if (avail.includes(c.id)) out.push(b("withdraw_credit", `Withdraw ${gen(c.credit, 6)} GEN credit for ${esc(c.date)}`, false, "", c.id));
+  if (isP) {
+    out.push(`<form data-form="top_up" class="row" style="align-items:end"><label>Add to bond (GEN)<input name="amount" type="number" step="any" min="0" required></label><div><button class="ghost">Top up</button></div></form>`);
+    if (s.open) out.push(b("close_service", "Close to new customers"));
+    else out.push(b("withdraw_bond", `Withdraw ${gen(s.bond, 6)} GEN bond`, true, now > s.bond_withdrawable_after && s.bond > 0 ? "" : `Available after ${when(s.bond_withdrawable_after)}`));
+    for (const c of claims) if (c.reserved > 0 && now > c.at + EXPIRY) out.push(b("sweep_claim", `Return ${gen(c.reserved, 6)} GEN unclaimed credit (${esc(c.date)}) to the bond`, true, "", c.id));
+  }
+  if (recov > 0) out.push(`<form data-form="recover" class="row" style="align-items:end"><label>Recover ${gen(recov, 6)} GEN from a failed transfer, to<input name="to" pattern="0x[0-9a-fA-F]{40}" value="${esc(me)}" required></label><div><button>Recover</button></div></form>`);
+  if (!out.length) return `<p class="hint" style="margin-top:16px">${isP ? "" : "You are not covered by this service."}</p>`;
+  return `<div style="display:grid;gap:12px;margin-top:20px">${out.join("")}</div>`;
+}
+
+async function show(id) {
+  const s = items.find((x) => x.id === id);
+  if (!s) return;
+  const claims = await sla.read("get_claims", [id]);
+  const sub = me ? await sla.read("get_subscription", [id, me]) : { start: 0, end: 0 };
+  const recov = me ? await sla.read("get_recoverable", [me]) : 0;
+  const avail = me ? (await Promise.all(claims.filter((c) => c.decision === "approved" && c.credit > 0 && c.reserved >= c.credit)
+    .map(async (c) => (await sla.read("credit_status", [c.id, me])) === "available" ? c.id : null))).filter((x) => x !== null) : [];
+  const el = $("#detail");
+  el.hidden = false;
+  el.innerHTML = `<h2>${esc(s.name)} · service #${s.id}</h2>
+    <blockquote style="margin:8px 0 12px;padding-left:12px;border-left:2px solid var(--fg)">${esc(s.sla)}</blockquote>
+    <dl class="kv">
+      <div><dt>Provider</dt><dd>${addr(s.provider)}</dd></div>
+      <div><dt>Evidence hosts</dt><dd class="mono">${s.hosts.map(esc).join(", ")}</dd></div>
+      <div><dt>Price</dt><dd>${gen(s.price, 6)} GEN per ${s.term_days} days</dd></div>
+      <div><dt>Credit</dt><dd>${gen(s.credit_per_minute, 8)} GEN per minute, max ${gen(s.max_credit, 6)} GEN per day, outages under ${s.min_minutes} min ignored</dd></div>
+      <div><dt>Free bond</dt><dd>${gen(s.bond, 6)} GEN</dd></div>
+      <div><dt>Customers</dt><dd>${s.live_subscribers} live of ${s.subscribers}</dd></div>
+      ${me ? `<div><dt>Your coverage</dt><dd>${sub.end ? `${when(sub.start)} → ${when(sub.end)}` : "none"}</dd></div>` : ""}
+    </dl>
+    <h2 style="margin-top:24px">Claims</h2>
+    ${claims.length ? `<div class="tbl"><table><thead><tr><th>Date</th><th>Decision</th><th class="r">Minutes</th><th class="r">Credit each</th><th>Evidence</th></tr></thead><tbody>
+      ${claims.map((c) => `<tr><td class="num">${esc(c.date)}</td><td><span class="tag ${c.decision === "approved" ? "ok" : "bad"}">${esc(c.decision)}</span>${c.reason ? ` <span class="mut">${esc(c.reason)}</span>` : ""}</td>
+        <td class="r num">${c.outage_minutes}</td><td class="r num">${c.decision === "approved" ? `${gen(c.credit, 6)} × ${c.covered}` : "–"}</td>
+        <td>${link(c.url)} <span class="mut" title="sha256 ${esc(c.page_sha256)} · ${c.page_chars} chars">sha256</span></td></tr>
+        ${c.summary ? `<tr><td></td><td colspan="4" class="mut">${esc(c.summary)}</td></tr>` : ""}`).join("")}
+    </tbody></table></div>` : `<p class="hint">No claims yet.</p>`}
+    ${actions(s, sub, claims, avail, recov)}`;
+  el.dataset.id = s.id;
+}
+
+$("#services").addEventListener("click", (e) => { const tr = e.target.closest("tr[data-id]"); if (tr) { e.preventDefault(); history.replaceState(null, "", `#service-${tr.dataset.id}`); show(Number(tr.dataset.id)); $("#detail").scrollIntoView({ behavior: "smooth" }); } });
+$("#detail").addEventListener("click", async (e) => {
+  const fn = e.target.dataset?.act; if (!fn) return;
+  const id = Number($("#detail").dataset.id), s = items.find((x) => x.id === id);
+  const args = ["withdraw_credit", "sweep_claim"].includes(fn) ? [Number(e.target.dataset.arg)] : [id];
+  if (fn === "close_service" && !confirm("Stop taking new customers? Existing coverage and claims continue.")) return;
+  if (await send(sla, fn.replaceAll("_", " "), fn, args, fn === "subscribe" ? BigInt(s.price) : 0n)) load(id);
+});
+$("#detail").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target, fn = f.dataset.form, id = Number($("#detail").dataset.id);
+  let args = [id], value = 0n;
+  if (fn === "file_claim") args = [id, Date.parse(f.day.value + "T00:00:00Z") / 1000, f.url.value];
+  else if (fn === "recover") args = [f.to.value];
+  else if (fn === "top_up") value = toWei(f.amount.value);
+  if (await send(sla, fn.replaceAll("_", " "), fn, args, value)) load(id);
+});
+$("#create").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target, hosts = f.hosts.value.split(/\s+/).map((h) => h.replace(/^https?:\/\//, "").replace(/\/.*$/, "")).filter(Boolean);
+  const args = [f.name.value, f.sla.value, JSON.stringify(hosts), toWei(f.price.value), Number(f.term.value), toWei(f.cpm.value), Number(f.min.value), toWei(f.max.value)];
+  if (await send(sla, "Publish service", "create_service", args, toWei(f.bond.value))) { f.reset(); load(); }
+});
+wireWallet((a) => { me = a; const id = Number($("#detail").dataset.id); if (!Number.isNaN(id)) show(id); });
+load();
+</script>
+
+<footer><div class="w"><span>Built on <a href="https://genlayer.com">GenLayer</a></span><a href="docs.html">Docs</a><a href="https://github.com/cris-the-dev/genlayer-slabond">Source</a></div></footer>
+<script>
+document.getElementById("sites").innerHTML=[["01","proofbounty"],["02","proofbounty-v2"],["03","ic-security-audit"],["04","oracle-kit"],["05","workshop"],["06","docs-security"],["07","rainfall-insurance"],["08","dealcourt"],["09","goalstake"],["10","mandateguard"],["11","slabond"],["12","attest"],["13","sponsorpay"],["14","modcourt"]]
+ .map(([n,s])=>`<a href="https://${s}.cristhedev.com"${s==="slabond"?' aria-current="page"':""}>${n}</a>`).join("");
+</script>
+</body></html>
