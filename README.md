@@ -22,7 +22,25 @@ customer ── withdraw_credit(claim)        provider ── withdraw_bond() af
 ## Live deployment
 
 App: https://slabond.cristhedev.com (services, claims, coverage and every role's actions; source in [`app/`](app/))  
-Testnet Bradbury (chainId 4221): [`0xbE1ea16621f083294c7e02f34F2CAB347cdE9Ce9`](https://explorer-bradbury.genlayer.com/address/0xbE1ea16621f083294c7e02f34F2CAB347cdE9Ce9)
+Testnet Bradbury (chainId 4221): [`0x9e7f59Ac6f97B7B4Bc15FD0F0A9D2663CdC0E627`](https://explorer-bradbury.genlayer.com/address/0x9e7f59Ac6f97B7B4Bc15FD0F0A9D2663CdC0E627)
+
+## Bradbury evidence
+
+Run by [`tests/integration/test_sla_bond.py`](tests/integration/test_sla_bond.py) (1 passed, 32 min). Contract `0x9e7f59Ac6f97B7B4Bc15FD0F0A9D2663CdC0E627` (deploy [`0x2bf96937…`](https://explorer-bradbury.genlayer.com/tx/0x2bf969378621138e06b980d48d2b077ba7fac521d96a42d6f3a2e495c35925af)), code `build/sla_bond.py` (sha256 `34329d55…`). Provider and customer are separate accounts.
+
+| Step | Transaction | Outcome |
+|---|---|---|
+| create service: price 0.001 GEN, 30 days, bond 0.001 GEN | [`0x8b5d3091…`](https://explorer-bradbury.genlayer.com/tx/0x8b5d309117abe0b66fea8e5d20574974a3fba7f2dfff5db5642381993a6d3349) | ok |
+| subscribe | [`0x9845b45f…`](https://explorer-bradbury.genlayer.com/tx/0x9845b45fe854557beeceebf520ff42c48933ae0070afc66375491b5d2413de05) | coverage from next 00:00 UTC; price payout 0 SENT to the provider |
+| claim for today | [`0x6e57f58e…`](https://explorer-bradbury.genlayer.com/tx/0x6e57f58e150c972feef8cc0b6e1c2653b8855a85c1ee4e0cd51092d163412a4d) | rejected: the day has not ended and is not covered |
+
+Each payout settled from its own transfer after the paying transaction finalized. Balance change is the recipient's `eth_getBalance` at the finalizing block minus the block before, checked by the test:
+
+| Payout | Kind | Paid by | Finalized by (block) | Recipient balance | `settle_payout` | Result |
+|---|---|---|---|---|---|---|
+| 0 | price → provider | [`0x9845b45f…`](https://explorer-bradbury.genlayer.com/tx/0x9845b45fe854557beeceebf520ff42c48933ae0070afc66375491b5d2413de05) | [`0xf16e7a4c…`](https://explorer-bradbury.genlayer.com/tx/0xf16e7a4c9e822fe77e393b3250854c8c2e0ec4494db4053b5990092b6d6cb0d3) (25276415) | +0.001 GEN | [`0xf8b216ea…`](https://explorer-bradbury.genlayer.com/tx/0xf8b216eac9aa4dd84346dc82b69334cbcc07b1eedc64ca48315f03440b2747e5) | DELIVERED |
+
+Settling the same payout again is rejected ([`0xef9557d3…`](https://explorer-bradbury.genlayer.com/tx/0xef9557d3436d752ffd0a682d4b7253b11cc9a782da99e08d8b85963417a897d0)). Afterwards `get_accounting` reports `unaccounted: 0`. A claim needs a finished covered UTC day, so it does not fit in one run; the claim path is covered by the direct tests.
 
 ## Why the LLM only extracts facts
 
@@ -83,14 +101,28 @@ SLA's exclusions) and the money path auditable.
   withdraws the free bond after the last coverage end plus the claim window.
   Credits nobody withdrew for 90 days can be swept back into the bond.
 
-## Payments and reconciliation
+## Payments and settlement
 
 Credits are pulled by each customer (`withdraw_credit`), so one claim never
 loops over transfers. Every transfer (price to provider, credit, bond,
-recovery) is a recorded payout; `expected_balance` tracks what the contract
-should hold. If a transfer is shown to have failed (the funds are still there
-after a 1-day settle window), anyone can call `reconcile_payout` and the amount
-becomes recoverable by its payee, who sends it anywhere with `recover`.
+recovery) is a recorded payout, judged by its own transfer, never by the
+contract's aggregate balance. A payout records the paying transaction's sender
+and creation time (one payment per sender per second, so that pair identifies
+the transaction).
+
+`settle_payout(payout_id, tx_hash, finalize_tx)`, callable by anyone, has
+validators read the Bradbury RPC and agree: `tx_hash` must be this contract's
+transaction from the payout's sender at its creation time, executed and
+finalized, calling the one method that creates that payout kind
+(`subscribe`, `withdraw_credit`, `withdraw_bond`, `recover`) with the service,
+claim or destination it names; `finalize_tx` must be the consensus transaction
+that finalized it. **DELIVERED** if the transfer to the payee executed there,
+**FAILED** if the messages contract logged that transfer's execution as failed
+(neither, as for a call that sent nothing, settles nothing): the amount becomes recoverable by its payee (the
+recoverer, for a failed `recover`), who sends it anywhere with `recover`, and
+that recovery is a settleable payout too. A payout settles once, and a paying
+transaction settles at most one payout. `get_accounting` (balance vs. expected)
+is informational only.
 
 ## API
 
@@ -104,7 +136,7 @@ becomes recoverable by its payee, who sends it anywhere with `recover`.
 | `subscribe(id)` payable | customer | exactly `price`; new or renewed coverage |
 | `file_claim(id, day, url)` | covered customer | consensus fact extraction; returns decision and credit |
 | `withdraw_credit(claim_id)` | covered customer | once per claim |
-| `reconcile_payout(payout_id)` / `recover(to)` | anyone / payee | failed transfers |
+| `settle_payout(payout_id, tx_hash, finalize_tx)` / `recover(to)` | anyone / payee | settle from the paying tx and its finalization; failed transfers become recoverable |
 | `get_service`, `get_service_count`, `get_subscription`, `get_claims`, `credit_status`, `get_payout`, `get_accounting`, `get_recoverable` | view | |
 
 ## Run
@@ -113,22 +145,22 @@ becomes recoverable by its payee, who sends it anywhere with `recover`.
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 genvm-lint check contracts/sla_bond.py
-pytest tests/direct -v                         # 37 tests
+pytest tests/direct -v                         # 50 tests
 # integration, on Bradbury, against the packed code (keys in GL_PK0..2 env vars)
 python deploy/shrink.py contracts/sla_bond.py build/sla_bond.py --pack
 cd tests/integration && gltest . -v -s --network testnet_bradbury
 ```
 
 Bradbury rejects deploys above ~20 KB of code; deploy the output of
-`deploy/shrink.py` (AST-checked, 26.7 KB → 7.4 KB packed). CI re-runs all
+`deploy/shrink.py` (AST-checked, 34.7 KB → 9.5 KB packed). CI re-runs all
 direct tests against the packed code.
 
 `demo/incident.html` is the demo provider's status page (served from
 `slabond.cristhedev.com/demo/`).
 
-## Tests (37 direct)
+## Tests (50 direct, Bradbury E2E)
 
-- **Lifecycle** — create validation; coverage starts at the next 00:00 UTC; exact price, provider cannot subscribe, solvency limit, renewal extends; lapsed restart blocked inside the claim window; approved claim credits every covered customer once each; credit cap; one approved claim per day; a rejected claim does not lock the day; out-of-scope and below-threshold rejections; claim guards (not 00:00 UTC, day not ended, window closed, not covered, foreign host, look-alike host, plain http); subdomains allowed; outsiders cannot claim or withdraw; pro-rata credits when the bond runs short; close, bond release and 90-day sweep; failed credit transfer reconciled and recovered once; delivered transfer cannot be reconciled.
+- **Lifecycle** — create validation; coverage starts at the next 00:00 UTC; exact price, provider cannot subscribe, solvency limit, renewal extends; lapsed restart blocked inside the claim window; approved claim credits every covered customer once each; credit cap; one approved claim per day; a rejected claim does not lock the day; out-of-scope and below-threshold rejections; claim guards (not 00:00 UTC, day not ended, window closed, not covered, foreign host, look-alike host, plain http); subdomains allowed; outsiders cannot claim or withdraw; pro-rata credits when the bond runs short; close, bond release and 90-day sweep; payouts settled from their own transfer: delivered, failed then recovered (and a failed recovery credited back to the recoverer), double settle, wrong sender/time/method/args, unfinalized or reverted tx, another tx's finalization, a paying tx settling one payout, one payment per sender per second, RPC down.
 - **Consensus (validator replay)** — agrees with an honest leader; minutes tolerance at both edges; rejects different facts, inflated minutes from a colluding leader, oversized/malformed payloads; unreachable pages revert and validators agree only on the same error (and reject it when the page is up); out-of-range LLM output reverts; the page is fenced.
 
 ## License

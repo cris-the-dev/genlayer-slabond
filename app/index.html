@@ -5,7 +5,7 @@
 </head><body>
 <div class="bar"><div class="w"><span class="who">cristhedev <span style="color:var(--line)">/</span> genlayer builds</span><nav id="sites"></nav></div></div>
 <div class="head"><div class="w"><div><h1>SLA Bond</h1><p>Uptime promises backed by money, settled by consensus</p></div><button id="connect" class="ghost" type="button">Connect wallet</button></div></div>
-<div class="meta"><div class="w"><span>contract <a href="https://explorer-bradbury.genlayer.com/address/0xbE1ea16621f083294c7e02f34F2CAB347cdE9Ce9">0x0000…0000 ↗</a></span><span>network <b>testnet bradbury</b></span><span><a href="https://github.com/cris-the-dev/genlayer-slabond">source ↗</a></span><span><a href="docs.html">docs →</a></span></div></div>
+<div class="meta"><div class="w"><span>contract <a href="https://explorer-bradbury.genlayer.com/address/0x9e7f59Ac6f97B7B4Bc15FD0F0A9D2663CdC0E627">0x9e7f…E627 ↗</a></span><span>network <b>testnet bradbury</b></span><span><a href="https://github.com/cris-the-dev/genlayer-slabond">source ↗</a></span><span><a href="docs.html">docs →</a></span></div></div>
 <main class="w">
   <p id="status" class="status" hidden></p>
   <div class="grid">
@@ -69,7 +69,7 @@
 
 <script type="module">
 import { contract, wireWallet, send, status, gen, toWei, esc, short, $, EXPLORER } from "./gl.js";
-const sla = contract("0xbE1ea16621f083294c7e02f34F2CAB347cdE9Ce9");
+const sla = contract("0x9e7f59Ac6f97B7B4Bc15FD0F0A9D2663CdC0E627");
 let me = null, items = [];
 const DAY = 86400, WINDOW = 7 * DAY, EXPIRY = 90 * DAY;
 const when = (ts) => ts ? new Date(ts * 1000).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }) + " UTC" : "–";
@@ -92,7 +92,7 @@ async function load(openId) {
   }
 }
 
-function actions(s, sub, claims, avail, recov) {
+function actions(s, sub, claims, avail, recov, pending = []) {
   if (!me) return `<p class="hint" style="margin-top:16px">Connect a wallet to subscribe, file a claim or withdraw a credit.</p>`;
   const isP = s.provider.toLowerCase() === me.toLowerCase(), now = Date.now() / 1000, out = [];
   const b = (fn, label, ghost = true, disabled = "", arg = "") => `<button class="${ghost ? "ghost" : ""}" data-act="${fn}"${arg !== "" ? ` data-arg="${arg}"` : ""}${disabled ? ` disabled title="${esc(disabled)}"` : ""}>${label}</button>`;
@@ -112,6 +112,7 @@ function actions(s, sub, claims, avail, recov) {
     else out.push(b("withdraw_bond", `Withdraw ${gen(s.bond, 6)} GEN bond`, true, now > s.bond_withdrawable_after && s.bond > 0 ? "" : `Available after ${when(s.bond_withdrawable_after)}`));
     for (const c of claims) if (c.reserved > 0 && now > c.at + EXPIRY) out.push(b("sweep_claim", `Return ${gen(c.reserved, 6)} GEN unclaimed credit (${esc(c.date)}) to the bond`, true, "", c.id));
   }
+  for (const p of pending) out.push(b("settle_payout", `Settle ${p.kind} payout #${p.id} (${gen(p.amount, 6)} GEN)`, true, "", p.id));
   if (recov > 0) out.push(`<form data-form="recover" class="row" style="align-items:end"><label>Recover ${gen(recov, 6)} GEN from a failed transfer, to<input name="to" pattern="0x[0-9a-fA-F]{40}" value="${esc(me)}" required></label><div><button>Recover</button></div></form>`);
   if (!out.length) return `<p class="hint" style="margin-top:16px">${isP ? "" : "You are not covered by this service."}</p>`;
   return `<div style="display:grid;gap:12px;margin-top:20px">${out.join("")}</div>`;
@@ -125,6 +126,10 @@ async function show(id) {
   const recov = me ? await sla.read("get_recoverable", [me]) : 0;
   const avail = me ? (await Promise.all(claims.filter((c) => c.decision === "approved" && c.credit > 0 && c.reserved >= c.credit)
     .map(async (c) => (await sla.read("credit_status", [c.id, me])) === "available" ? c.id : null))).filter((x) => x !== null) : [];
+  // Your unsettled payouts: settle each from its own transfer once the paying transaction is finalized.
+  const n = me ? (await sla.read("get_accounting", [])).payout_count : 0;
+  const pending = (await Promise.all(Array.from({ length: n }, async (_, i) => ({ id: i, ...(await sla.read("get_payout", [i])) }))))
+    .filter((p) => p.status === "SENT" && [p.sender, p.to].some((a) => a.toLowerCase() === me.toLowerCase()));
   const el = $("#detail");
   el.hidden = false;
   el.innerHTML = `<h2>${esc(s.name)} · service #${s.id}</h2>
@@ -145,7 +150,7 @@ async function show(id) {
         <td>${link(c.url)} <span class="mut" title="sha256 ${esc(c.page_sha256)} · ${c.page_chars} chars">sha256</span></td></tr>
         ${c.summary ? `<tr><td></td><td colspan="4" class="mut">${esc(c.summary)}</td></tr>` : ""}`).join("")}
     </tbody></table></div>` : `<p class="hint">No claims yet.</p>`}
-    ${actions(s, sub, claims, avail, recov)}`;
+    ${actions(s, sub, claims, avail, recov, pending)}`;
   el.dataset.id = s.id;
 }
 
@@ -153,7 +158,12 @@ $("#services").addEventListener("click", (e) => { const tr = e.target.closest("t
 $("#detail").addEventListener("click", async (e) => {
   const fn = e.target.dataset?.act; if (!fn) return;
   const id = Number($("#detail").dataset.id), s = items.find((x) => x.id === id);
-  const args = ["withdraw_credit", "sweep_claim"].includes(fn) ? [Number(e.target.dataset.arg)] : [id];
+  let args = ["withdraw_credit", "sweep_claim"].includes(fn) ? [Number(e.target.dataset.arg)] : [id];
+  if (fn === "settle_payout") {
+    const tx = prompt("GenLayer transaction that made this payment (0x…)"), fin = tx && prompt("Consensus-layer transaction that finalized it (0x…)");
+    if (!fin) return;
+    args = [Number(e.target.dataset.arg), tx.trim(), fin.trim()];
+  }
   if (fn === "close_service" && !confirm("Stop taking new customers? Existing coverage and claims continue.")) return;
   if (await send(sla, fn.replaceAll("_", " "), fn, args, fn === "subscribe" ? BigInt(s.price) : 0n)) load(id);
 });
