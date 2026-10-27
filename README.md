@@ -22,25 +22,31 @@ customer ── withdraw_credit(claim)        provider ── withdraw_bond() af
 ## Live deployment
 
 App: https://slabond.cristhedev.com (services, claims, coverage and every role's actions; source in [`app/`](app/))  
-Testnet Bradbury (chainId 4221): [`0x9e7f59Ac6f97B7B4Bc15FD0F0A9D2663CdC0E627`](https://explorer-bradbury.genlayer.com/address/0x9e7f59Ac6f97B7B4Bc15FD0F0A9D2663CdC0E627)
+Testnet Bradbury Phase 2 (chainId 4221, GenVM v0.3): [`0xC384Af02bebf57Fd4f53a22232046508939234CD`](https://explorer-bradbury.genlayer.com/address/0xC384Af02bebf57Fd4f53a22232046508939234CD)
 
 ## Bradbury evidence
 
-Run by [`tests/integration/test_sla_bond.py`](tests/integration/test_sla_bond.py) (1 passed, 32 min). Contract `0x9e7f59Ac6f97B7B4Bc15FD0F0A9D2663CdC0E627` (deploy [`0x2bf96937…`](https://explorer-bradbury.genlayer.com/tx/0x2bf969378621138e06b980d48d2b077ba7fac521d96a42d6f3a2e495c35925af)), code `build/sla_bond.py` (sha256 `34329d55…`). Provider and customer are separate accounts.
+Run by [`tests/integration/bradbury.mjs`](tests/integration/bradbury.mjs) on Bradbury Phase 2 (GenVM v0.3): every check passed except the final accounting check as first written, which expected `unaccounted: 0` (see below; the script now expects the stray amount). Contract `0xC384Af02bebf57Fd4f53a22232046508939234CD` (deploy [`0x585ab43e…`](https://explorer-bradbury.genlayer.com/tx/0x585ab43e19826c37ce8e5160abe1d046e48570d81aef3a1c263e31d5467722da)), code `build/sla_bond.py` (sha256 `088c95f1…`). Provider (GL_PK0) and customer (GL_PK1) are separate accounts; paying calls carry the External message allocation for their payee.
 
 | Step | Transaction | Outcome |
 |---|---|---|
-| create service: price 0.001 GEN, 30 days, bond 0.001 GEN | [`0x8b5d3091…`](https://explorer-bradbury.genlayer.com/tx/0x8b5d309117abe0b66fea8e5d20574974a3fba7f2dfff5db5642381993a6d3349) | ok |
-| subscribe | [`0x9845b45f…`](https://explorer-bradbury.genlayer.com/tx/0x9845b45fe854557beeceebf520ff42c48933ae0070afc66375491b5d2413de05) | coverage from next 00:00 UTC; price payout 0 SENT to the provider |
-| claim for today | [`0x6e57f58e…`](https://explorer-bradbury.genlayer.com/tx/0x6e57f58e150c972feef8cc0b6e1c2653b8855a85c1ee4e0cd51092d163412a4d) | rejected: the day has not ended and is not covered |
+| create service: price 0.001 GEN, 30 days, bond 0.001 GEN | [`0x373f0b8d…`](https://explorer-bradbury.genlayer.com/tx/0x373f0b8d52e2bed3f00a8e88642b3185e75d2f16716dd5719e9f4c3f75769c40) | ok |
+| close the service from the customer | [`0xca693de2…`](https://explorer-bradbury.genlayer.com/tx/0xca693de2b36416e65578b203aafe16178117accadd69eaecbcd1df0e6f2abada) | rejected: provider only |
+| subscribe as the provider | [`0xeeb4a585…`](https://explorer-bradbury.genlayer.com/tx/0xeeb4a585ad8275ef4f27f4f0423d1f3a0fa63e90416b415dea2fca574fe68753) | rejected |
+| subscribe | [`0xb9a48e2c…`](https://explorer-bradbury.genlayer.com/tx/0xb9a48e2caa92546ceb658876c4fcdce72bf3e7d2421f38c43bdd93dd4a798b73) | coverage from 2026-10-28 00:00 UTC; price payout 0 SENT to the provider |
+| claim for today | [`0x28c0740b…`](https://explorer-bradbury.genlayer.com/tx/0x28c0740bf595dc45603cb00842501eae89e8e37acf711a35ff9e00cf7a3d46a7) | rejected: the day has not ended |
 
-Each payout settled from its own transfer after the paying transaction finalized. Balance change is the recipient's `eth_getBalance` at the finalizing block minus the block before, checked by the test:
+Each payout is settled from its own transfer after the paying transaction finalized:
 
-| Payout | Kind | Paid by | Finalized by (block) | Recipient balance | `settle_payout` | Result |
+| Payout | Kind | Paid by | Finalized by (block) | Recipient balance in that block | `settle_payout` | Result |
 |---|---|---|---|---|---|---|
-| 0 | price → provider | [`0x9845b45f…`](https://explorer-bradbury.genlayer.com/tx/0x9845b45fe854557beeceebf520ff42c48933ae0070afc66375491b5d2413de05) | [`0xf16e7a4c…`](https://explorer-bradbury.genlayer.com/tx/0xf16e7a4c9e822fe77e393b3250854c8c2e0ec4494db4053b5990092b6d6cb0d3) (25276415) | +0.001 GEN | [`0xf8b216ea…`](https://explorer-bradbury.genlayer.com/tx/0xf8b216eac9aa4dd84346dc82b69334cbcc07b1eedc64ca48315f03440b2747e5) | DELIVERED |
+| 0 | price → provider | [`0xb9a48e2c…`](https://explorer-bradbury.genlayer.com/tx/0xb9a48e2caa92546ceb658876c4fcdce72bf3e7d2421f38c43bdd93dd4a798b73) | [`0x358b90d8…`](https://explorer-bradbury.genlayer.com/tx/0x358b90d8f476b6b7f34e68525280ea7bf089894b97b6efbbba31f07ad016c009) (186115) | +0.001 GEN (contract −0.001) | [`0x831430a3…`](https://explorer-bradbury.genlayer.com/tx/0x831430a3c3218fc1474722b65b099fae12ab9fb56cd42070415ae1018871eab0) | DELIVERED |
 
-Settling the same payout again is rejected ([`0xef9557d3…`](https://explorer-bradbury.genlayer.com/tx/0xef9557d3436d752ffd0a682d4b7253b11cc9a782da99e08d8b85963417a897d0)). Afterwards `get_accounting` reports `unaccounted: 0`. A claim needs a finished covered UTC day, so it does not fit in one run; the claim path is covered by the direct tests.
+Settling the same payout again is rejected ([`0x0edd0457…`](https://explorer-bradbury.genlayer.com/tx/0x0edd04574b45f4aa14973dd21c46a06b6ca807fdb6017f561f635e5c1161590d)).
+
+The first `create_service` attempt ([`0x09500bc0…`](https://explorer-bradbury.genlayer.com/tx/0x09500bc081e9cd3e7046fc51660b6ac52e3ae77ac00915fe076bc7a6858a56d5)) timed out at the leader (NOT_VOTED, result Absent) and was sent again. Bradbury executed nothing for it but still moved its 0.001 GEN into the contract, so `get_accounting` reports exactly that amount as `unaccounted`; the script checks `unaccounted` equals the value of such unexecuted transactions. No method can return it (the contract never learns it arrived).
+
+Claims need finished covered UTC days and run on the same contract with `bradbury.mjs claims`.
 
 ## Why the LLM only extracts facts
 
@@ -124,6 +130,16 @@ that recovery is a settleable payout too. A payout settles once, and a paying
 transaction settles at most one payout. `get_accounting` (balance vs. expected)
 is informational only.
 
+On Bradbury Phase 2 a transfer out of a contract is an external (EVM) message
+whose gas is paid from the calling transaction's fee deposit, so a paying call
+must carry an External message allocation for the payee (the app and the E2E
+script add it; see [`app/README.md`](app/README.md)). **Known limit:** a paying
+call sent without it still succeeds and moves the amount out of the contract's
+books, but the chain never executes the transfer and logs nothing for it, so
+the payout can be settled neither DELIVERED nor FAILED and stays SENT; the
+value then shows up as `unaccounted` in `get_accounting`. The contract cannot
+check the caller's allocation itself.
+
 ## API
 
 | Method | Who | Notes |
@@ -145,20 +161,23 @@ is informational only.
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 genvm-lint check contracts/sla_bond.py
-pytest tests/direct -v                         # 50 tests
-# integration, on Bradbury, against the packed code (keys in GL_PK0..2 env vars)
+pytest tests/direct -v                         # 54 tests
+# E2E on Bradbury against the packed code (keys in GL_PK0, GL_PK1; genlayer-js setup in the script header)
 python deploy/shrink.py contracts/sla_bond.py build/sla_bond.py --pack
-cd tests/integration && gltest . -v -s --network testnet_bradbury
+node tests/integration/bradbury.mjs build/sla_bond.py          # deploy, service, subscribe, settle
+node tests/integration/bradbury.mjs claims <contract>          # after two covered days have ended
 ```
 
 Bradbury rejects deploys above ~20 KB of code; deploy the output of
-`deploy/shrink.py` (AST-checked, 34.7 KB → 9.5 KB packed). CI re-runs all
+`deploy/shrink.py` (AST-checked, 36.6 KB → 10.2 KB packed). CI re-runs all
 direct tests against the packed code.
 
-`demo/incident.html` is the demo provider's status page (served from
-`slabond.cristhedev.com/demo/`).
+`demo/status.html` is the demo provider's status page (a 45-minute outage on
+28 October 2026, announced maintenance on the 29th) and
+`demo/status-injected.html` a page with no incident and a prompt injection;
+both are served from `slabond.cristhedev.com/demo/`.
 
-## Tests (50 direct, Bradbury E2E)
+## Tests (54 direct, Bradbury E2E)
 
 - **Lifecycle** — create validation; coverage starts at the next 00:00 UTC; exact price, provider cannot subscribe, solvency limit, renewal extends; lapsed restart blocked inside the claim window; approved claim credits every covered customer once each; credit cap; one approved claim per day; a rejected claim does not lock the day; out-of-scope and below-threshold rejections; claim guards (not 00:00 UTC, day not ended, window closed, not covered, foreign host, look-alike host, plain http); subdomains allowed; outsiders cannot claim or withdraw; pro-rata credits when the bond runs short; close, bond release and 90-day sweep; payouts settled from their own transfer: delivered, failed then recovered (and a failed recovery credited back to the recoverer), double settle, wrong sender/time/method/args, unfinalized or reverted tx, another tx's finalization, a paying tx settling one payout, one payment per sender per second, RPC down.
 - **Consensus (validator replay)** — agrees with an honest leader; minutes tolerance at both edges; rejects different facts, inflated minutes from a colluding leader, oversized/malformed payloads; unreachable pages revert and validators agree only on the same error (and reject it when the page is up); out-of-range LLM output reverts; the page is fenced.

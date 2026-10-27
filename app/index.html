@@ -5,7 +5,7 @@
 </head><body>
 <div class="bar"><div class="w"><span class="who">cristhedev <span style="color:var(--line)">/</span> genlayer builds</span><nav id="sites"></nav></div></div>
 <div class="head"><div class="w"><div><h1>SLA Bond</h1><p>Uptime promises backed by money, settled by consensus</p></div><button id="connect" class="ghost" type="button">Connect wallet</button></div></div>
-<div class="meta"><div class="w"><span>contract <a href="https://explorer-bradbury.genlayer.com/address/0x9e7f59Ac6f97B7B4Bc15FD0F0A9D2663CdC0E627">0x9e7f…E627 ↗</a></span><span>network <b>testnet bradbury</b></span><span><a href="https://github.com/cris-the-dev/genlayer-slabond">source ↗</a></span><span><a href="docs.html">docs →</a></span></div></div>
+<div class="meta"><div class="w"><span>contract <a href="https://explorer-bradbury.genlayer.com/address/0xC384Af02bebf57Fd4f53a22232046508939234CD">0xC384…34CD ↗</a></span><span>network <b>testnet bradbury</b></span><span><a href="https://github.com/cris-the-dev/genlayer-slabond">source ↗</a></span><span><a href="docs.html">docs →</a></span></div></div>
 <main class="w">
   <p id="status" class="status" hidden></p>
   <div class="grid">
@@ -69,7 +69,7 @@
 
 <script type="module">
 import { contract, wireWallet, send, status, gen, toWei, esc, short, $, EXPLORER } from "./gl.js";
-const sla = contract("0x9e7f59Ac6f97B7B4Bc15FD0F0A9D2663CdC0E627");
+const sla = contract("0xC384Af02bebf57Fd4f53a22232046508939234CD");
 let me = null, items = [];
 const DAY = 86400, WINDOW = 7 * DAY, EXPIRY = 90 * DAY;
 const when = (ts) => ts ? new Date(ts * 1000).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }) + " UTC" : "–";
@@ -165,7 +165,9 @@ $("#detail").addEventListener("click", async (e) => {
     args = [Number(e.target.dataset.arg), tx.trim(), fin.trim()];
   }
   if (fn === "close_service" && !confirm("Stop taking new customers? Existing coverage and claims continue.")) return;
-  if (await send(sla, fn.replaceAll("_", " "), fn, args, fn === "subscribe" ? BigInt(s.price) : 0n)) load(id);
+  // Calls that pay someone allocate that transfer's gas (see gl.js).
+  const payee = { subscribe: s.provider, withdraw_bond: s.provider, withdraw_credit: me }[fn];
+  if (await send(sla, fn.replaceAll("_", " "), fn, args, fn === "subscribe" ? BigInt(s.price) : 0n, payee)) load(id);
 });
 $("#detail").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -174,7 +176,7 @@ $("#detail").addEventListener("submit", async (e) => {
   if (fn === "file_claim") args = [id, Date.parse(f.day.value + "T00:00:00Z") / 1000, f.url.value];
   else if (fn === "recover") args = [f.to.value];
   else if (fn === "top_up") value = toWei(f.amount.value);
-  if (await send(sla, fn.replaceAll("_", " "), fn, args, value)) load(id);
+  if (await send(sla, fn.replaceAll("_", " "), fn, args, value, fn === "recover" ? f.to.value : undefined)) load(id);
 });
 $("#create").addEventListener("submit", async (e) => {
   e.preventDefault();

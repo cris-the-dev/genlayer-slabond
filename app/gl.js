@@ -1,7 +1,7 @@
-// Shared wallet + contract helpers for the demo apps (testnet Bradbury, MetaMask).
-import { createClient, testnetBradbury } from "./genlayer.js"; // bundle of genlayer-js 1.1.8 (see README);
+// Shared wallet + contract helpers for the demo apps (testnet Bradbury Phase 2, MetaMask).
+import { createClient, testnetBradbury, MessageType, encodeExternalMessageFeeParams } from "./genlayer.js"; // bundle of genlayer-js 2.0.0-rc.2 (see README);
 
-export const EXPLORER = "https://explorer-bradbury.genlayer.com";
+export const EXPLORER = testnetBradbury.blockExplorers.default.url;
 const CHAIN_HEX = "0x" + testnetBradbury.id.toString(16);
 
 export const plain = (v) =>
@@ -9,17 +9,29 @@ export const plain = (v) =>
   : Array.isArray(v) ? v.map(plain)
   : typeof v === "bigint" ? Number(v) : v;
 
-const reader = createClient({ chain: testnetBradbury });
+// The chain's default RPC (rpc.testnet-chain.genlayer.com) does not serve gen_call; this one serves the same chain.
+const endpoint = "https://rpc-bradbury.genlayer.com";
+const reader = createClient({ chain: testnetBradbury, endpoint });
+// Gas the contract's payout (an external EVM message) may use on delivery; unused budget is refunded.
+const PAYOUT_GAS = 100000n, PAYOUT_GAS_PRICE = 1000000000n;
 let account = null;
 
 export function contract(address) {
   return {
     read: async (functionName, args = []) => plain(await reader.readContract({ address, functionName, args })),
-    // Sends a tx through MetaMask and waits until validators accept it.
-    write: async (functionName, args = [], value = 0n, onHash) => {
+    // Sends a tx through MetaMask and waits until validators accept it. `payee`: the
+    // address the call pays, if any; its transfer's gas is allocated from this tx's fee deposit.
+    write: async (functionName, args = [], value = 0n, onHash, payee) => {
       if (!account) throw new Error("Connect a wallet first");
-      const client = createClient({ chain: testnetBradbury, account });
-      const hash = await client.writeContract({ address, functionName, args, value });
+      const client = createClient({ chain: testnetBradbury, endpoint, account });
+      // Bradbury Phase 2 rejects transactions without a fee deposit; the unused part is refunded.
+      const messageAllocations = payee ? [{
+        messageType: MessageType.External, onAcceptance: false, recipient: payee, budget: PAYOUT_GAS * PAYOUT_GAS_PRICE,
+        callKey: "0x" + "00".repeat(32), feeParams: encodeExternalMessageFeeParams({ gasLimit: PAYOUT_GAS, maxGasPrice: PAYOUT_GAS_PRICE }),
+      }] : undefined;
+      const e = await client.estimateTransactionFees(messageAllocations ? { messageAllocations } : {});
+      const fees = { distribution: e.distribution, feeValue: e.feeValue, ...(payee && { messageAllocations: e.messageAllocations }) };
+      const hash = await client.writeContract({ address, functionName, args, value, fees });
       onHash?.(hash);
       // Poll ourselves so timeouts stop the wait instead of hanging until retries run out.
       for (let i = 0; i < 120; i++) {
@@ -94,10 +106,10 @@ export function status(msg, isError = false, hash) {
 }
 
 // Run a write with consistent status messages; returns true on success.
-export async function send(c, label, fn, args, value = 0n) {
+export async function send(c, label, fn, args, value = 0n, payee) {
   status(`${label}: confirm in your wallet…`);
   try {
-    await c.write(fn, args, value, (h) => status(`${label}: waiting for validators to agree (this can take a minute)…`, false, h));
+    await c.write(fn, args, value, (h) => status(`${label}: waiting for validators to agree (this can take a minute)…`, false, h), payee);
     status(`${label}: done.`);
     return true;
   } catch (e) {

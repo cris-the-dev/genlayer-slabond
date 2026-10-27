@@ -3,7 +3,7 @@
     python deploy/shrink.py contracts/x.py build/x.py          # strip docstrings/comments, 1-space indent
     python deploy/shrink.py contracts/x.py build/x.py --pack   # ...then zlib+base85 self-extracting stub
 
-The first line (`# { "Depends": ... }`) is kept verbatim. The output's AST is asserted
+The leading comment header (`# v0.3.0`, `# { "Depends": ... }`) is kept verbatim. The output's AST is asserted
 equal to the source's (minus docstrings), and --pack asserts a lossless round-trip.
 Run the direct tests against the output before deploying it.
 """
@@ -31,8 +31,10 @@ def _strip_docstrings(tree):
 
 def shrink(src: str, pack: bool = False) -> str:
     src = src.replace("\r\n", "\n")
-    header, _ = src.split("\n", 1)
-    assert header.startswith('# { "Depends"'), "first line must be the Depends header"
+    lines = src.split("\n")
+    n = next(i for i, l in enumerate(lines) if l.startswith('# { "Depends"')) + 1
+    assert all(l.startswith("#") for l in lines[:n]), "the Depends header must open the file"
+    header = "\n".join(lines[:n])
     body = ast.unparse(_strip_docstrings(ast.parse(src)))
     body = "\n".join(
         re.sub(r"^((?:    )+)", lambda m: " " * (len(m.group(1)) // 4), line) for line in body.split("\n")
