@@ -4,6 +4,7 @@
 //   npm i genlayer-js@2.0.0-rc.2   # plus the estimateTransactionFees patch in app/README.md
 //   GL_PK0=0x... GL_PK1=0x... node tests/integration/bradbury.mjs build/sla_bond.py [contract]
 //   GL_PK0=0x... GL_PK1=0x... node tests/integration/bradbury.mjs claims <contract>
+//   GL_PK0=0x... GL_PK1=0x... node tests/integration/bradbury.mjs settle <contract> <payout_id> <paying_tx>
 //
 // The first run deploys (unless given a contract), opens a service (GL_PK0 is the provider),
 // subscribes GL_PK1, checks the guards, and settles the price payout from its own transfer once
@@ -53,16 +54,19 @@ const check = (ok, what) => {
   console.log(ok ? "  ok  " : "  FAIL", what);
   if (!ok) process.exit(1);
 };
-// A leader timeout (NOT_VOTED) executed nothing, so sending the call again is safe. Bradbury still
-// moves such a transaction's value into the contract, where get_accounting shows it as unaccounted.
+// A leader timeout executed nothing, so sending the call again is safe. Bradbury reports it as
+// NOT_VOTED, or as status LEADER_TIMEOUT with a stale FINISHED_WITH_RETURN result. It still moves
+// such a transaction's value into the contract, where get_accounting shows it as unaccounted.
 let stray = 0n;
 async function tx(c, label, functionName, args, { value = 0n, payee } = {}) {
   for (let i = 0; ; i++) {
     const hash = await c.writeContract({ address, functionName, args, value, fees: await fees(c, payee) });
     const r = await wait(c, hash);
-    console.log(`${label}: ${hash} ${r.txExecutionResultName}`);
-    if (r.txExecutionResultName !== "NOT_VOTED" || i >= 2) return { ...r, hash };
+    const timedOut = r.statusName === "LEADER_TIMEOUT" || r.txExecutionResultName === "NOT_VOTED";
+    console.log(`${label}: ${hash} ${timedOut ? "LEADER_TIMEOUT" : r.txExecutionResultName}`);
+    if (!timedOut) return { ...r, hash };
     stray += value;
+    if (i >= 2) return { ...r, hash, txExecutionResultName: "NOT_VOTED" };
   }
 }
 const read = async (functionName, args = []) => {
@@ -93,14 +97,32 @@ async function settle(id, paid, fromBlock) {
   console.log(`finalized by ${fin}`);
   const r = await tx(c1, `settle payout ${id}`, "settle_payout", [id, paid.hash, fin]);
   check(r.txExecutionResultName === "FINISHED_WITH_RETURN", "settle succeeds");
-  check((await read("get_payout", [id])).status === "DELIVERED", `payout ${id} DELIVERED`);
+  check((await eventually(() => read("get_payout", [id]), (p) => p.status !== "SENT")).status === "DELIVERED", `payout ${id} DELIVERED`);
   r.fin = fin;
   return r;
 }
 const unaccounted = async () => BigInt((await read("get_accounting")).unaccounted);
+// The RPC can serve state a little behind the receipt: re-read until `ok` holds (up to ~5 min).
+async function eventually(fn, ok) {
+  let v = await fn();
+  for (let i = 0; !ok(v) && i < 30; i++) {
+    await new Promise((r) => setTimeout(r, 10000));
+    v = await fn();
+  }
+  return v;
+}
 
 let address = process.argv[3];
-if (process.argv[2] !== "claims") {
+if (process.argv[2] === "settle") {
+  // Resume: settle payout <id> paid by <tx> (e.g. after the RPC dropped mid-run).
+  const [id, hash] = [Number(process.argv[4]), process.argv[5]];
+  stray = await unaccounted();
+  const from = BigInt(await rpc("eth_blockNumber", [])) - 50000n;
+  await settle(id, { hash }, from > 0n ? from : 0n);
+  const r = await tx(c1, "settle again", "settle_payout", [id, hash, (await finalizeTx(hash, from > 0n ? from : 0n))]);
+  check(r.txExecutionResultName === "FINISHED_WITH_ERROR", "a payout settles once");
+  check((await unaccounted()) === stray, `balance matches what the contract expects to hold (+${stray} from unexecuted txs)`);
+} else if (process.argv[2] !== "claims") {
   if (!address) {
     const hash = await c0.deployContract({ code: readFileSync(process.argv[2], "utf8"), args: [], fees: await fees(c0) });
     const r = await wait(c0, hash);
@@ -143,9 +165,17 @@ if (process.argv[2] !== "claims") {
   check(Date.now() / 1000 > maintenance + DAY, "two covered days have ended");
   const claims = async () => await read("get_claims", [sid]);
   const claim = async (label, day, url) => {
+    const n = (await claims()).length;
     const r = await tx(c1, label, "file_claim", [sid, day, url]);
     check(r.txExecutionResultName === "FINISHED_WITH_RETURN", `${label} recorded`);
-    const k = (await claims()).at(-1);
+    // The RPC can serve state a little behind the receipt; read until the new claim shows.
+    let all = await claims();
+    for (let i = 0; all.length === n && i < 30; i++) {
+      await new Promise((ok) => setTimeout(ok, 10000));
+      all = await claims();
+    }
+    const k = all.at(-1);
+    check(all.length === n + 1, `${label}: claim ${k?.id} readable`);
     console.log(`    claim ${k.id} ${k.date}: ${k.decision} ${k.outage_minutes} min ${JSON.stringify(k.reason)} ${JSON.stringify(k.summary)}`);
     return k;
   };
@@ -155,7 +185,10 @@ if (process.argv[2] !== "claims") {
   r = await tx(c0, "claim by provider", "file_claim", [sid, outage, DEMO + "status.html"]);
   check(r.txExecutionResultName === "FINISHED_WITH_ERROR", "the provider is not covered");
 
-  let k = await claim("maintenance day", maintenance, DEMO + "status.html");
+  const before = await claims();
+  let k = before.find((x) => Number(x.day) === maintenance && x.url === DEMO + "status.html");
+  if (k) console.log(`    maintenance day already filed: claim ${k.id} ${k.decision} ${JSON.stringify(k.reason)}`);
+  else k = await claim("maintenance day", maintenance, DEMO + "status.html");
   check(k.decision === "rejected" && BigInt(k.credit) === 0n, "announced maintenance is excluded");
   k = await claim("injected page", maintenance, DEMO + "status-injected.html");
   check(k.decision === "rejected" && Number(k.outage_minutes) === 0, "a prompt injection on the page does not create an outage");
@@ -164,7 +197,7 @@ if (process.argv[2] !== "claims") {
   const credit = BigInt(k.credit);
   const cap = BigInt(svc.max_credit), perMinute = BigInt(svc.credit_per_minute);
   check(credit === (BigInt(k.outage_minutes) * perMinute < cap ? BigInt(k.outage_minutes) * perMinute : cap), `credit ${credit} = minutes x rate, capped`);
-  check(BigInt((await read("get_service", [sid])).bond) === BigInt(svc.bond) - credit, "bond reduced by the credit");
+  check(BigInt((await eventually(() => read("get_service", [sid]), (x) => BigInt(x.bond) !== BigInt(svc.bond))).bond) === BigInt(svc.bond) - credit, "bond reduced by the credit");
   r = await tx(c1, "claim same day", "file_claim", [sid, outage, DEMO + "status.html"]);
   check(r.txExecutionResultName === "FINISHED_WITH_ERROR", "a day is approved once");
 
@@ -174,7 +207,7 @@ if (process.argv[2] !== "claims") {
   const pid = Number((await read("get_accounting")).payout_count);
   const paid = await tx(c1, "withdraw_credit", "withdraw_credit", [k.id], { payee: a1.address });
   check(paid.txExecutionResultName === "FINISHED_WITH_RETURN", "customer withdraws the credit");
-  check((await read("credit_status", [k.id, a1.address])) === "withdrawn", "credit_status withdrawn");
+  check((await eventually(() => read("credit_status", [k.id, a1.address]), (v) => v === "withdrawn")) === "withdrawn", "credit_status withdrawn");
   r = await tx(c1, "withdraw again", "withdraw_credit", [k.id], { payee: a1.address });
   check(r.txExecutionResultName === "FINISHED_WITH_ERROR", "a credit is withdrawn once");
   const p = await read("get_payout", [pid]);

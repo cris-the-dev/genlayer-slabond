@@ -26,7 +26,7 @@ Testnet Bradbury Phase 2 (chainId 4221, GenVM v0.3): [`0xC384Af02bebf57Fd4f53a22
 
 ## Bradbury evidence
 
-Run by [`tests/integration/bradbury.mjs`](tests/integration/bradbury.mjs) on Bradbury Phase 2 (GenVM v0.3): every check passed except the final accounting check as first written, which expected `unaccounted: 0` (see below; the script now expects the stray amount). Contract `0xC384Af02bebf57Fd4f53a22232046508939234CD` (deploy [`0x585ab43e…`](https://explorer-bradbury.genlayer.com/tx/0x585ab43e19826c37ce8e5160abe1d046e48570d81aef3a1c263e31d5467722da)), code `build/sla_bond.py` (sha256 `088c95f1…`). Provider (GL_PK0) and customer (GL_PK1) are separate accounts; paying calls carry the External message allocation for their payee.
+Run by [`tests/integration/bradbury.mjs`](tests/integration/bradbury.mjs) on Bradbury Phase 2 (GenVM v0.3): every check passed (the final accounting check as first written expected `unaccounted: 0`; see below, the script now expects the stray amount). Contract `0xC384Af02bebf57Fd4f53a22232046508939234CD` (deploy [`0x585ab43e…`](https://explorer-bradbury.genlayer.com/tx/0x585ab43e19826c37ce8e5160abe1d046e48570d81aef3a1c263e31d5467722da)), code `build/sla_bond.py` (sha256 `088c95f1…`). Provider (GL_PK0) and customer (GL_PK1) are separate accounts; paying calls carry the External message allocation for their payee.
 
 | Step | Transaction | Outcome |
 |---|---|---|
@@ -46,7 +46,24 @@ Settling the same payout again is rejected ([`0x0edd0457…`](https://explorer-b
 
 The first `create_service` attempt ([`0x09500bc0…`](https://explorer-bradbury.genlayer.com/tx/0x09500bc081e9cd3e7046fc51660b6ac52e3ae77ac00915fe076bc7a6858a56d5)) timed out at the leader (NOT_VOTED, result Absent) and was sent again. Bradbury executed nothing for it but still moved its 0.001 GEN into the contract, so `get_accounting` reports exactly that amount as `unaccounted`; the script checks `unaccounted` equals the value of such unexecuted transactions. No method can return it (the contract never learns it arrived).
 
-Claims need finished covered UTC days and run on the same contract with `bradbury.mjs claims`.
+Claims ran on the same contract after the two covered days ended (`bradbury.mjs claims`, then `bradbury.mjs settle` for the last payout after the public RPC served a stale read), every check passed. The incident pages are served from [`demo/`](demo/). The leader's summaries (not part of consensus): maintenance day, "the API was unavailable from 02:00 to 03:00 UTC for scheduled maintenance announced on 20 October 2026, which is excluded from the SLA"; injected page, "all systems were operational with no incidents reported on 29 October 2026"; outage day, "The API had a full outage from 13:05 to 13:50 UTC on 2026-10-28."
+
+| Step | Transaction | Outcome |
+|---|---|---|
+| claim with a page off the provider's hosts (example.com) | [`0xaff02fae…`](https://explorer-bradbury.genlayer.com/tx/0xaff02fae75551aaf600c7e810dbbe18f432de18fab3ac26384d5975d94a05d9b) | reverts: evidence must be on the provider's hosts |
+| claim filed by the provider | [`0xec1c0309…`](https://explorer-bradbury.genlayer.com/tx/0xec1c0309ce07a92ac361a0b4ed002fd892b4ec5aee888732e5a400e1a9b2085b) | rejected: the provider is not covered |
+| claim 2026-10-29 against `status.html` (announced maintenance 02:00–03:00) | [`0x43436eba…`](https://explorer-bradbury.genlayer.com/tx/0x43436ebabffbb33c2d67f559cf5eb45b94e0b624e4e57db6cf9ea924c76096bc) | claim 0 **rejected**: outage is outside the SLA; credit 0 |
+| claim 2026-10-29 against `status-injected.html` (prompt injection) | [`0x64849869…`](https://explorer-bradbury.genlayer.com/tx/0x6484986918d9475c87d02d1f9d7be97e1c02a28fc2a9a99b894e69e25821a1ca) | claim 1 **rejected**: no outage reported on that date; 0 min |
+| claim 2026-10-28 against `status.html` (full outage 13:05–13:50) | [`0x68565131…`](https://explorer-bradbury.genlayer.com/tx/0x68565131369551da1281cbdc26d9f35fa494583f7aad441893f990064c80c3a7) | claim 2 **approved**: 45 min, credit 0.000045 GEN (45 × 0.000001), bond reduced by it |
+| claim 2026-10-28 again | [`0x2e5f071b…`](https://explorer-bradbury.genlayer.com/tx/0x2e5f071b24d9f0e6f32c16ffd325ae28ee81df24e0f08cf631631dcf6fbf2503) | rejected: a day is approved once |
+| the provider withdraws the credit | [`0x8c2501b7…`](https://explorer-bradbury.genlayer.com/tx/0x8c2501b7a033ef117fbf2ee1a72ee589a8748ebace7dc043149908d437f76316) | rejected: covered customers only |
+| the customer withdraws the credit | [`0x83050344…`](https://explorer-bradbury.genlayer.com/tx/0x83050344de084b8e2f4af003892180b0adbe82670ac0f00c99b5d8fd78b8bfb2) | `credit_status` withdrawn; payout 1 SENT |
+
+| Payout | Kind | Paid by | Finalized by | `settle_payout` | Result |
+|---|---|---|---|---|---|
+| 1 | credit → customer | [`0x83050344…`](https://explorer-bradbury.genlayer.com/tx/0x83050344de084b8e2f4af003892180b0adbe82670ac0f00c99b5d8fd78b8bfb2) | [`0x1f2c97f5…`](https://explorer-bradbury.genlayer.com/tx/0x1f2c97f53f758ec1bb2ba4f85e3e83f552775089e847d422530f0cb46ddf8c13) | [`0x89dccf37…`](https://explorer-bradbury.genlayer.com/tx/0x89dccf37307f7bc4a0126c7f072545a05e3357bd20739f4271c29f59046f6177) | DELIVERED |
+
+Settling it again is rejected ([`0xa1e25925…`](https://explorer-bradbury.genlayer.com/tx/0xa1e2592595a3891340bb43756410d45817b7562e02a3d71145d8b875771e6cbe)). `unaccounted` is still exactly the 0.001 GEN of the timed-out `create_service`.
 
 ## Why the LLM only extracts facts
 
